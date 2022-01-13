@@ -42,7 +42,8 @@ for filename in filesnames:
         flag = False
         for line in data_file:
             line = line.replace("\n", "").replace('"', "'").replace("\\", "/")
-            if line in ("СекцияДокумент=Платежное поручение", "СекцияДокумент=Банковский ордер", "СекцияДокумент=Платежное требование"):
+            if "СекцияДокумент=" in line: #"Платежное поручение", "СекцияДокумент=Банковский ордер",
+                        #"СекцияДокумент=Платежное требование", "СекцияДокумент=Мемориальный ордер"):
                 all_data += "{"
                 flag = True
             if "КонецДокумента" in line:
@@ -52,7 +53,7 @@ for filename in filesnames:
                 if flag:
                     tmp_list = line.split("=")
                     tmp_list[1] = tmp_list[1].upper()
-                    if "Дата" in tmp_list[0]:
+                    if "ДАТА" in tmp_list[0].upper():
                         if tmp_list[1] != "":
                             tmp_list[1] = str_to_data(tmp_list[1])
                             # tmp_list[1] = convert_data(tmp_list[1])
@@ -63,7 +64,7 @@ for filename in filesnames:
                         all_data += f'"{tmp_list[0]}":"{tmp_list[1]}", '
                     if tmp_list[0] == "НазначениеПлатежа" and "ЗАЧИСЛЕНИЕ СРЕДСТВ ПО ОПЕРАЦИЯМ С МБК (НА ОСНОВАНИИ РЕЕСТРОВ ПЛАТЕЖЕЙ)." in tmp_list[1]:
                         tmp_lst = tmp_list[1].split()
-                        all_data += f'"Номер мерчанта":"{tmp_lst[11].strip("№.")}", "Дата операции магазин":"{str_to_data(tmp_lst[14].rstrip("."))}", ' \
+                        all_data += f'"Номер мерчанта":"{tmp_lst[11].strip("№.")}", "Дата операции магазин":{str_to_data(tmp_lst[14].rstrip("."))}, ' \
                                     f'"Сумма комиссии":{tmp_lst[16].rstrip(".").replace(",", "")}, "Возврат1":{tmp_lst[19].split("/")[0].replace(",", "")}, ' \
                                     f'"Возврат2":{tmp_lst[19].split("/")[1].rstrip(".").replace(",", "")}, '
 
@@ -75,6 +76,20 @@ with open("test.json", "w") as tst_file:
     tst_file.write(all_data)
 
 df = pd.DataFrame(json.loads(all_data))
-df.to_excel(filename_xls, index=False)
+# df.to_excel(filename_xls, index=False)
+
+writer = pd.ExcelWriter(filename_xls, engine='xlsxwriter')
+with writer as file_name:
+    df.to_excel(file_name, sheet_name="All_vipiski", index=False)
+    workbook  = writer.book
+    worksheet = writer.sheets["All_vipiski"]
+    # Add some cell formats.
+    format_data = workbook.add_format({'num_format': 'dd/mm/yy'})
+    # Set the column width and format.
+    count = 0
+    for col in df.columns:
+        if "ДАТА" in col.upper():
+            worksheet.set_column(count, count, 15, format_data)
+        count += 1
 
 
