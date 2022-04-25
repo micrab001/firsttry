@@ -136,6 +136,7 @@ for i in range(2, len(itog)):
 itog_sum = itog[["Номер мерчанта", "Проверка"]]
 itog_sum = itog_sum.groupby(["Номер мерчанта"], as_index=False).sum()
 # поиск не найденных платежей по совпадению сумм
+# поиск по расхождениям в месяце
 list_plat = list(map(abs,itog_sum[itog_sum["Проверка"]!= 0]["Проверка"].tolist()))
 find_plat =  svod[svod["Получено"].isin(list_plat)]
 #
