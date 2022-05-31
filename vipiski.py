@@ -88,7 +88,7 @@ df = pd.DataFrame(json.loads(all_data))
 svod = df[["Дата", "Сумма", "ДатаПоступило", "Получатель", "НазначениеПлатежа", "Номер мерчанта",
            "Сумма комиссии", "Возврат1", "Возврат2"]] # "Дата операции магазин"
 svod = svod[svod["Номер мерчанта"].notnull()]
-svod = svod.sort_values(by=["Номер мерчанта", "Дата"])
+svod = svod.sort_values(by=["Номер мерчанта", "Дата"], ignore_index = True)
 svod["Получено"] = svod["Сумма"] + svod["Сумма комиссии"]
 
 print("таблица выписок сформирована")
@@ -111,9 +111,43 @@ sber_test = sber_df[["Номер мерчанта", "Дата зачислени
 sber_test = sber_test.groupby(["Номер мерчанта", "Дата зачисления", "Дата операции магазин"], as_index=False).sum()
 
 # слияние данных сбера и банка
+print("Слияние данных и поиск недостающих платежей")
 itog = svod_sber_df.merge(svod, how = "left", left_on= ["Номер мерчанта", "Дата зачисления"], right_on=["Номер мерчанта", "Дата"],
           suffixes=('_sber', '_bank'))
 
+# проверка на потерянные платежи при банковском переводе и не учтенные при проверке сумм зачислений по эквайрингу в середине месяца
+new_line = {'Номер мерчанта':[], 'Дата зачисления':[], 'Сумма операции':[], 'Сумма комиссии_sber':[], 'Сумма расчета':[], 'Дата':[], 'Сумма':[],
+          'ДатаПоступило':[], 'Получатель':[], 'НазначениеПлатежа':[], 'Сумма комиссии_bank':[], 'Возврат1':[], 'Возврат2':[], 'Получено':[]}
+
+# проход по банковским платежам и ищем, попали ли они в проверку
+# если не попали, добавляем их в таблицу
+for i in range(1, len(svod)):
+    find_lost_payment = itog.loc[itog["Номер мерчанта"] == svod.loc[i, "Номер мерчанта"]]
+    tmp_list_data = sorted(find_lost_payment["Дата"].tolist()) # ограничения по датам эквайринга
+    end_data = tmp_list_data[-1] # последняя дата эквайринга
+    start_data = tmp_list_data[0] # первая дата (как бы ограничиваем месяц)
+    find_lost_payment = find_lost_payment.loc[find_lost_payment["Дата зачисления"] == svod.loc[i, "Дата"]]
+    find_lost_payment = find_lost_payment.loc[find_lost_payment["Получено"] == svod.loc[i, "Получено"]]
+    if len(find_lost_payment) == 0 and svod.loc[i, "Дата"] <= end_data and svod.loc[i, "Дата"] >= start_data:
+        new_line['Номер мерчанта'].append(svod.loc[i, "Номер мерчанта"])
+        new_line['Дата зачисления'].append(svod.loc[i, "Дата"])
+        new_line['Сумма операции'].append(0)
+        new_line['Сумма комиссии_sber'].append(0)
+        new_line['Сумма расчета'].append(0)
+        new_line["Дата"].append(svod.loc[i, "Дата"])
+        new_line["Сумма"].append(svod.loc[i, "Сумма"])
+        new_line["ДатаПоступило"].append(svod.loc[i, "ДатаПоступило"])
+        new_line["Получатель"].append(svod.loc[i, "Получатель"])
+        new_line["НазначениеПлатежа"].append(svod.loc[i, "НазначениеПлатежа"])
+        new_line["Сумма комиссии_bank"].append(svod.loc[i, "Сумма комиссии"])
+        new_line["Возврат1"].append(svod.loc[i, "Возврат1"])
+        new_line["Возврат2"].append(svod.loc[i, "Возврат2"])
+        new_line["Получено"].append(svod.loc[i, "Получено"])
+if len(new_line['Номер мерчанта']) > 0:
+    new_line_df = pd.DataFrame(new_line)
+    itog = pd.concat([itog, new_line_df], ignore_index = True)
+    itog = itog.sort_values(by = ["Номер мерчанта",	"Дата зачисления"], ignore_index = True)
+print("Недостающие платежи проверены")
 # проверка на пустые значения после слияния
 for i in range(1, len(itog)):
     if pd.isna(itog.loc[i, "Получено"]):
@@ -139,6 +173,7 @@ itog_sum = itog_sum.groupby(["Номер мерчанта"], as_index=False).sum
 # поиск по расхождениям в месяце
 list_plat = list(map(abs,itog_sum[itog_sum["Проверка"]!= 0]["Проверка"].tolist()))
 find_plat =  svod[svod["Получено"].isin(list_plat)]
+
 #
 #
 print("расчеты произведены")
