@@ -5,7 +5,8 @@ import os
 import datetime
 
 # выбор нужной директории и создание списка файлов в нем с расширением тхт
-dirname = filedialog.askdirectory(initialdir=os.getcwd()).replace("/", chr(92))
+
+dirname = filedialog.askdirectory(initialdir="d:\\OneDrive\\Рабочие документы\\Выписки Альфа\\").replace("/", chr(92)) #initialdir=os.getcwd()
 all_dir = os.listdir(dirname)
 filesnames = [dirname+chr(92)+f for f in all_dir if os.path.isfile(dirname+chr(92)+f) and ".txt" in f]
 
@@ -94,7 +95,7 @@ svod["Получено"] = svod["Сумма"] + svod["Сумма комисси�
 print("таблица выписок сформирована")
 
 # считываение данных по эквайрингу от Сбера
-filename = filedialog.askopenfilename(initialdir=os.getcwd())
+filename = filedialog.askopenfilename(initialdir="d:\\OneDrive\\Рабочие документы\\Эквайринг\\") #initialdir=os.getcwd()
 sber_df = pd.read_excel(pd.ExcelFile(filename), "Sheet0")
 print("чтение данных Сбер завершено")
 sber_df["Дата зачисления"] = sber_df["Дата выгрузки в АБС"].apply(convert_data)
