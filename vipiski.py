@@ -124,6 +124,9 @@ new_line = {'Номер мерчанта':[], 'Дата зачисления':[]
 # если не попали, добавляем их в таблицу
 for i in range(1, len(svod)):
     find_lost_payment = itog.loc[itog["Номер мерчанта"] == svod.loc[i, "Номер мерчанта"]]
+    if len(find_lost_payment) == 0:
+        print("**************** потерянный мерчант (ищи в выписках)", svod.loc[i, "Номер мерчанта"])
+        continue
     tmp_list_data = sorted(find_lost_payment["Дата"].tolist()) # ограничения по датам эквайринга
     end_data = tmp_list_data[-1] # последняя дата эквайринга
     start_data = tmp_list_data[0] # первая дата (как бы ограничиваем месяц)
@@ -170,11 +173,15 @@ for i in range(2, len(itog)):
 # собирает итоги месяца по мерчанту, если проверка не равна 0 надо искать потерянные платежи
 itog_sum = itog[["Номер мерчанта", "Проверка"]]
 itog_sum = itog_sum.groupby(["Номер мерчанта"], as_index=False).sum()
+itog_sum["Финальная проверка"] = itog_sum["Проверка"].abs()
 # поиск не найденных платежей по совпадению сумм
-# поиск по расхождениям в месяце
+# поиск по расхождениям в месяце и корректировка предыдущего списка итогов месяца
 list_plat = list(map(abs,itog_sum[itog_sum["Проверка"]!= 0]["Проверка"].tolist()))
 find_plat =  svod[svod["Получено"].isin(list_plat)]
-
+list_plat = find_plat["Получено"].tolist()
+for i in range(1, len(itog_sum)):
+    if itog_sum.loc[i, "Финальная проверка"] in list_plat:
+        itog_sum.loc[i, "Финальная проверка"] = 0
 #
 #
 print("расчеты произведены")
