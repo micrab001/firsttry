@@ -72,7 +72,7 @@ for filename in filesnames:
                         tmp_lst = tmp_list[1].split()
                         all_data += f'"Номер мерчанта":"{tmp_lst[tmp_lst.index("МЕРЧАНТ")+1].strip("№.")}", "Дата операции магазин":{str_to_data(tmp_lst[tmp_lst.index("РЕЕСТРА")+1].rstrip("."))}, ' \
                                     f'"Сумма комиссии":{tmp_lst[tmp_lst.index("КОМИССИЯ")+1].rstrip(".").replace(",", "")}, "Возврат1":{tmp_lst[tmp_lst.index("ПОКУПКИ")+1].split("/")[0].replace(",", "")}, ' \
-                                    f'"Возврат2":{tmp_lst[tmp_lst.index("ПОКУПКИ")+1].split("/")[1].rstrip(".").replace(",", "")}, '
+                                    f'"Возврат2":{tmp_lst[tmp_lst.index("ПОКУПКИ")+1].split("/")[1].rstrip(".").replace(",", "").replace(".НДС","")}, '
 
 all_data = all_data.replace(", }", "}")
 all_data = all_data[0: all_data.rfind(",")]
