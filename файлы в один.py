@@ -3,7 +3,10 @@ import os
 import pandas as pd
 from tkinter import filedialog
 import pyodbc
+import datetime
 
+datefrom = datetime.datetime(2022, 10, 1)
+dateto = datetime.datetime(2022, 10, 31)  # берется диапазон включая крайние даты
 
 class files_to_one():
     """ Открывает по очереди файлы из указанной директории, соединяет таблицы вместе из этих файлов и записывает
@@ -25,9 +28,14 @@ class files_to_one():
         self.filename = filename.lower()
         self.skp_row = skp_row
         self.head_new = head_new
-        dirname = filedialog.askdirectory(initialdir="d:\\OneDrive\\Рабочие документы\\Эквайринг\\", title=f"Выбор кталога с файлами {filetype}").replace("/", chr(92)) # initialdir=os.getcwd()
+        dirname = filedialog.askdirectory(initialdir="d:\\OneDrive\\Рабочие документы\\Эквайринг\\Альфа", title=f"Выбор кталога с файлами {filetype}").replace("/", chr(92)) # initialdir=os.getcwd()
         self.dirname = dirname
         all_dir = os.listdir(dirname)
+        filename = self.filename + ".xlsx"
+        if self.filetype == ".xlsx" and filename in all_dir:
+            os.remove(dirname + chr(92) + filename)
+            print(f"file {filename} deleted")
+            all_dir.remove(filename)
         self.filesnames = [dirname + chr(92) + f for f in all_dir if os.path.isfile(dirname + chr(92) + f) and f[-len(self.filetype):].lower() == self.filetype.lower()]
         self.tables_in_one()
 
@@ -38,7 +46,8 @@ class files_to_one():
             return pd.read_excel(pd.ExcelFile(file_name))
         elif self.filetype == ".csv":
             return pd.read_csv(file_name, sep=";", encoding="cp1251", encoding_errors="replace", skiprows=(None if self.skp_row==0 else self.skp_row),
-                               header=(None if self.head_new else "infer"), names=(self.table_header if self.head_new else None))
+                               header=(None if self.head_new else "infer"), names=(self.table_header if self.head_new else None),
+                               dtype=({'Код авторизации': 'str'} if self.head_new else None ))
 
     def tables_in_one(self):
         """таблицы в одну из списка файлов"""
@@ -83,11 +92,13 @@ if __name__ == '__main__':
     eqv.all_data = eqv.all_data[eqv.all_data["Дата"].notnull()]
     eqv.all_data = eqv.all_data.fillna("")
     eqv.all_data["Дата"] = pd.to_datetime(eqv.all_data["Дата"], format='%d.%m.%Y')
+    eqv.all_data = eqv.all_data[(eqv.all_data["Дата"] >= datefrom) & (eqv.all_data["Дата"] <= dateto)]
     eqv.all_data[["Номер терминала", "ID оплаты", "Референс операции", "Банк", "Валюта"]] = eqv.all_data[["Номер терминала", "ID оплаты", "Референс операции", "Банк", "Валюта"]].astype("int64").astype("str")
     eqv.all_data = eqv.all_data.drop_duplicates(subset=['Дата', 'Время', 'Карта или счет', 'Номер терминала', "Код авторизации",'Сумма транзакции'])
+    eqv.all_data["Система"] = "эквайринг"
     eqv.wrile_data()
     full_data = pd.concat([full_data, eqv.all_data], ignore_index=True)
-    print("эквайринг собрали")
+    print("**************** эквайринг собрали")
 
     print("собираем файлы CSV системы быстрых платежей **************")
     sbp = files_to_one("csv", "All_month_sbp")
@@ -96,43 +107,24 @@ if __name__ == '__main__':
                   'Банк', 'Сумма транзакции', 'Тип операции', 'Номер терминала', 'Комиссия банка', 'Сумма перевода',
                   'Валюта', 'Назначение платежа', 'Имя магазина', 'ID магазина', 'ID оплаты', 'Референс операции']
     sbp.all_data.columns = new_header
-
     sbp.all_data["Дата"] = pd.to_datetime(sbp.all_data["Дата"], format='%d.%m.%Y')
-    sbp.all_data[["Номер терминала", "Банк"]] = sbp.all_data[["Номер терминала", "Банк"]].astype("str")
-    # sbp.all_data["ID оплаты"] = sbp.all_data["ID оплаты"].astype("str")
+    sbp.all_data = sbp.all_data[(sbp.all_data["Дата"] >= datefrom) & (sbp.all_data["Дата"] <= dateto)]
+    sbp.all_data[["Номер терминала", "Банк", "ID оплаты"]] = sbp.all_data[["Номер терминала", "Банк", "ID оплаты"]].astype("str")
+    sbp.all_data["Система"] = "СБП"
     sbp.all_data = sbp.all_data.drop_duplicates(subset=['Дата', 'Время', 'ID СБП', 'ID QR', 'Карта или счет', 'Номер терминала', 'Сумма транзакции'])
-    # eqv.all_data["Дубль"] = eqv.all_data.duplicated(subset=['Дата', 'Время', 'Карта или счет', 'Номер терминала', "Код авторизации",'Сумма транзакции'])
-
     sbp.wrile_data()
     full_data = pd.concat([full_data, sbp.all_data], ignore_index=True)
-
-    print("СБП собрали")
-
-    # print("эквайринг", eqv.all_data.dtypes)
-    # print("СБП",sbp.all_data.dtypes)
-    print("объединение",full_data.dtypes)
-    print(full_data[['Дата', 'Время']])
-    # full_data.to_excel("\\".join(sbp.dirname.split("\\")[:-1]) + chr(92) + "full_data.xlsx", sheet_name="Sheet0", index=False)
-    # exit(0)
-
-
-
-
+    print("********************************* СБП собрали")
 
     # не забыть удалить объединенный файл из каталога, если он уже есть
+
     print("собираем файлы Excel выгрузки из БК за месяц *************************")
     exl = files_to_one("xlsx", "All_BK_month")
     exl.all_data = exl.all_data.fillna("")
-    print("проверка", exl.all_data.dtypes)
-    print(exl.all_data)
     tmp_data = pd.to_datetime(exl.all_data["Дата"], format='%d/%m/%Y %H:%M:%S')
     exl.all_data["Дата"] = pd.to_datetime(tmp_data.dt.date)
     exl.all_data["Время"] = tmp_data.dt.time
-
-
-    print("*****************", exl.all_data.dtypes)
-    print(exl.all_data[['Дата', 'Время']])
-
+    exl.all_data = exl.all_data[(exl.all_data["Дата"] >= datefrom) & (exl.all_data["Дата"] <= dateto)]
     new_header = ["Дата", "Платежная система", "Карта или счет", "Имя магазина", "Номер терминала", "Банк",
                   "Код авторизации", "Тип операции", "Комиссия банка", "Валюта комиссии", "Сумма транзакции",
                   "Валюта", "Статус", "Время"]
@@ -141,7 +133,8 @@ if __name__ == '__main__':
     new_header = ["Дата", "Время", "Платежная система", "Карта или счет", "Имя магазина", "Номер терминала", "Банк",
                   "Код авторизации", "Тип операции", "Комиссия банка", "Сумма транзакции", "Валюта"]
     exl.all_data = exl.all_data.reindex(columns=new_header)
-    exl.all_data["Номер терминала"] = exl.all_data["Номер терминала"].astype("str")
+    exl.all_data["Система"] = "эквайринг"
+    exl.all_data[["Номер терминала", "Код авторизации"]] = exl.all_data[["Номер терминала", "Код авторизации"]].astype("str")
     exl.all_data["Комиссия банка"] = exl.all_data["Комиссия банка"] * (-1)
 
     def chg_time(time_wrong: str):
@@ -153,12 +146,8 @@ if __name__ == '__main__':
         return f"{time_new:02}{time_wrong[-6:]}"
 
     exl.all_data['Время'] = exl.all_data['Время'].apply(chg_time)
-
-    # itog = x.all_data.merge(pos.datatable, how="left", left_on="Номер терминала", right_on="posnumber", suffixes=('_alfa', '_pos'))
-    # itog.drop(["Торговая точка", "posnumber"], axis=1, inplace=True)
-    # itog.rename(columns={"Дата": "Дата и время", "Наименование эмитента карты": "Банк", "magname": "Магазин", "nomer": "Номер магазина", "Namesm": "Юрлицо"}, inplace=True)
-    #
     exl.wrile_data()
+    print("**************************************** excel собрали")
 
     def chg_operation(per: str):
         per_up = per.upper()
@@ -169,20 +158,99 @@ if __name__ == '__main__':
         else:
             return per
 
+    print("Обрабатываем все операции ********************************")
     full_data = pd.concat([full_data, exl.all_data], ignore_index=True)
-    # full_data['Сумма перевода'] = full_data['Сумма перевода'].apply(lambda x: full_data["Комиссия банка"] + full_data["Сумма транзакции"] if type(x) != int or type(x) != float else x)
+    # проверка списка терминалов, чтобы все из отчета были в таблице из базы
+    term_baza = pos.datatable["posnumber"].unique()  # получаем список терминалов из базы
+    for term_otchet in full_data["Номер терминала"].unique():  # ищем терминалы из отчета в списке терминалов в базе
+        if term_otchet not in term_baza:
+            print(f"************************ незарегистрированный терминал №{term_otchet} . Требуется сначала внести его в базу")
+            exit("найден неопознанный терминал")
     full_data['Тип операции'] = full_data['Тип операции'].apply(chg_operation)
-    for i in range(1, len(full_data)):
-        if full_data.loc[i, 'Тип операции'] == "Возврат":
+
+    for i in range(0, len(full_data)):
+        if full_data.loc[i, 'Тип операции'] == "Возврат" and full_data.loc[i, 'Сумма транзакции'] > 0:
             full_data.loc[i, 'Сумма транзакции'] = full_data.loc[i, 'Сумма транзакции'] * -1
+            if full_data.loc[i, "Система"] == "СБП":
+                full_data.loc[i, "Сумма перевода"] = full_data.loc[i, "Сумма перевода"] * -1
+        if (pd.isna(full_data.loc[i, "Код авторизации"]) or full_data.loc[i, "Код авторизации"] == "") and full_data.loc[i, "Система"] == "эквайринг":
+            full_data.loc[i, "Код авторизации"] = "000000"
+            if full_data.loc[i, "Комиссия банка"] > 0:
+                full_data.loc[i, 'Сумма транзакции'] = full_data.loc[i, 'Сумма транзакции'] * -1
+        if pd.isna(full_data.loc[i, "Сумма перевода"]):
+            full_data.loc[i, "Сумма перевода"] = full_data.loc[i, 'Сумма транзакции'] + full_data.loc[i, 'Комиссия банка']
+        # тут можно еще разных обработок наделать, например банка
+
+    full_data = full_data.drop_duplicates(subset=['Дата', 'Время', 'Карта или счет', 'Номер терминала', "Код авторизации",'Сумма транзакции'])
+    full_data = full_data.merge(pos.datatable, how="left", left_on="Номер терминала", right_on="posnumber", suffixes=('_alfa', '_pos'))
+    full_data.drop(["Имя магазина", "posnumber", "Наименование ЮЛ"], axis=1, inplace=True)
+    full_data.rename(columns={"magname": "Магазин", "nomer": "Номер магазина", "Namesm": "Юрлицо"}, inplace=True)
+    full_data.sort_values(by=["Юрлицо", "Номер магазина", "Номер терминала", 'Дата', 'Время'], inplace=True)
+    full_data["Номер магазина"] = full_data["Номер магазина"].astype("str")
+
+    def okrugl(a):
+        return round(a,2)
+
+    # загружаем данные банка по операциям
+    print("Загрузка данных из банка ********************************")
+    filename = filedialog.askopenfilename(initialdir="d:\\OneDrive\\Рабочие документы\\Выписки Альфа", title="Выбрать файл с выписками из банка")
+    bank_operation = pd.read_excel(pd.ExcelFile(filename), "Вся выписка")
+    bank_operation = bank_operation[["СекцияДокумент", "Номер", "Дата", "Сумма", "Плательщик", "Получатель", "НазначениеПлатежа"]]
+    list_inn = list(map(str, full_data["INN"].unique()))
+    bank_operation = bank_operation[bank_operation['НазначениеПлатежа'].str.contains('|'.join(list_inn))]
+    bank_operation = bank_operation[(bank_operation["Дата"] >= datefrom) & (bank_operation["Дата"] <= (dateto + datetime.timedelta(days=1)))]
+    bank_operation["Найдено"] = False
+
+    # собираем эквайринг по дням
+    print("Собираем и проверяем суммы по дням  ********************************")
+    data_by_day = full_data[["INN", "Юрлицо", "Дата", "Система", 'Сумма транзакции', 'Комиссия банка',
+                              'Сумма перевода']].groupby(["INN", "Юрлицо", "Дата", "Система"], as_index=False).sum()
+    data_by_day["Найдено"] = False
+    for i in range(0, len(data_by_day)):
+        if data_by_day.loc[i, 'Система'] == "эквайринг":
+            find_operation = bank_operation[(bank_operation["Дата"] == (data_by_day.loc[i, "Дата"] + datetime.timedelta(days=1))) &
+                                            (bank_operation["Сумма"] == round(data_by_day.loc[i, "Сумма перевода"],2)) &
+                                            (bank_operation['НазначениеПлатежа'].str.contains(data_by_day.loc[i, "INN"])) &
+                                            (bank_operation["Найдено"] == False)]
+            if len(find_operation) == 1:
+                data_by_day.loc[i, 'Найдено'] = True
+                bank_operation.loc[find_operation.index[0], "Найдено"] = True
+
+                # bank_operation.loc[(bank_operation["Дата"] == (data_by_day.loc[i, "Дата"] + datetime.timedelta(days=1))) &
+                #                (bank_operation["Сумма"] == round(data_by_day.loc[i, "Сумма перевода"],2)) &
+                #                (bank_operation['НазначениеПлатежа'].str.contains(data_by_day.loc[i, "INN"])) &
+                #                (bank_operation["Найдено"] == False), "Найдено"] = True
+
+        elif data_by_day.loc[i, 'Система'] == "СБП":
+            find_operation = full_data[(full_data["Дата"] == data_by_day.loc[i, "Дата"]) &
+                                       (full_data["INN"] == data_by_day.loc[i, "INN"]) &
+                                       (full_data['Система'] == "СБП")]
+            if len(find_operation) > 0:
+                sum_by_day = 0
+                for j in range(0, len(find_operation)):
+                    bank_operation.loc[bank_operation['НазначениеПлатежа'].str.contains(find_operation.iloc[j]["Референс операции"]), "Найдено"] = True
+                    sum_by_day += bank_operation.loc[bank_operation['НазначениеПлатежа'].str.contains(find_operation.iloc[j]["Референс операции"]), "Сумма"].sum()
+                sum_by_day = round(sum_by_day, 2)
+                if sum_by_day == round(data_by_day.loc[i, 'Сумма транзакции'] - data_by_day.loc[i, 'Комиссия банка'], 2):
+                    data_by_day.loc[i, 'Найдено'] = True
+
+    # собираем комиссию для Филиппа
+    print("Собираем комиссию Филиппу  ********************************")
+    mag_komiss = pd.pivot_table(full_data, index=['Магазин'], columns=["Система"], values=['Комиссия банка'],
+                                aggfunc=sum)  # margins=True
+    mag_komiss = mag_komiss * -1
+
+    # записываем результат в файл
+    print("Запись результирующего файла  ********************************")
+    writer = pd.ExcelWriter("\\".join(sbp.dirname.split("\\")[:-1]) + chr(92) + "full_data.xlsx", engine='xlsxwriter')
+    full_data.to_excel(writer, sheet_name='Sheet0', index=False)
+    data_by_day.to_excel(writer, sheet_name='По дням', index=False)
+    mag_komiss.to_excel(writer, sheet_name='Для Филиппа')
+    bank_operation.to_excel(writer, sheet_name="Банк", index=False)
+    # df3.to_excel(writer, sheet_name='Sheetc')
+    writer.save()
 
 
-
-
-    print(full_data.dtypes)
-    print(full_data[['Дата', 'Время']])
-
-    full_data.to_excel("\\".join(sbp.dirname.split("\\")[:-1]) + chr(92) + "full_data.xlsx", sheet_name="Sheet0", index=False)
-
+    # full_data.to_excel("\\".join(sbp.dirname.split("\\")[:-1]) + chr(92) + "full_data.xlsx", sheet_name="Sheet0", index=False)
 
 

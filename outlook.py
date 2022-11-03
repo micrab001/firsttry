@@ -25,8 +25,9 @@ class Work_with_outlook():
         # # today 12am
         # end_time = today.replace(hour=0, minute=0, second=0).strftime('%Y-%m-%d %H:%M %p')
 
-        datefrom = "01/09/22" #date(2022, 9, 1).strftime('%Y-%m-%d %H:%M %p')
-        dateto = "01/10/22" #date(2022, 9, 2).strftime('%Y-%m-%d %H:%M %p')  # диапазон надо вводить плюс 1 день
+        datefrom = "01/09/22" # брать с 01 числа
+        dateto = "02/11/22" # берется диапазон включая крайние даты плюс 1 день!
+
         ini_dir = "d:\\OneDrive\\Рабочие документы\\Эквайринг\\"
         self.process_sbp = True
         self.process_card = True
