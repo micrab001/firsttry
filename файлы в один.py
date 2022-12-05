@@ -4,9 +4,10 @@ import pandas as pd
 from tkinter import filedialog
 import pyodbc
 import datetime
+import sqlite3
 
-datefrom = datetime.datetime(2022, 10, 1)
-dateto = datetime.datetime(2022, 10, 31)  # берется диапазон включая крайние даты
+datefrom = datetime.datetime(2022, 11, 1)
+dateto = datetime.datetime(2022, 11, 30)  # берется диапазон включая крайние даты
 
 class files_to_one():
     """ Открывает по очереди файлы из указанной директории, соединяет таблицы вместе из этих файлов и записывает
@@ -168,7 +169,55 @@ if __name__ == '__main__':
             exit("найден неопознанный терминал")
     full_data['Тип операции'] = full_data['Тип операции'].apply(chg_operation)
 
+    db = sqlite3.connect("c:\\Vrem\\Python10\\bd_bin_code.db")
+    cur = db.cursor()
+
+
+    def convert_bin(val):
+        if type(val) != str:
+            return "Другой"
+        bin_code = val[0:6]
+        sql_str = f"SELECT * FROM bincode WHERE BIN = '{bin_code}';"
+        cur.execute(sql_str)
+        rezult = cur.fetchall()
+        col_name = [el[0] for el in cur.description]
+        if len(rezult) == 1:
+            rez = dict(zip(col_name, rezult[0]))
+            if rez['Банк-эмитент'] != "":
+                return rez['Банк-эмитент']
+            else:
+                return "Другой"
+        else:
+            return "Другой"
+
+
+    def convert_bic_code(val):
+        if type(val) != str:
+            return "Другой"
+        bic_code = val
+        sql_str = f"SELECT * FROM bic_code WHERE BIC LIKE '%{bic_code}';"
+        cur.execute(sql_str)
+        rezult = cur.fetchall()
+        col_name = [el[0] for el in cur.description]
+        if len(rezult) == 1:
+            rez = dict(zip(col_name, rezult[0]))
+            if rez['Name_org'] != "":
+                return rez['Name_org']
+            else:
+                return "Другой"
+        else:
+            return "Другой"
+
+
+    full_data.insert(full_data.columns.get_loc('Банк') + 1, 'Наименование банка', "")
+    count = 10
     for i in range(0, len(full_data)):
+        # Печать счетчика
+        rez = int(i/len(full_data)*100)
+        if rez >= count:
+            print(f"Обрабатываем операции: {rez}%")
+            count += 10
+
         if full_data.loc[i, 'Тип операции'] == "Возврат" and full_data.loc[i, 'Сумма транзакции'] > 0:
             full_data.loc[i, 'Сумма транзакции'] = full_data.loc[i, 'Сумма транзакции'] * -1
             if full_data.loc[i, "Система"] == "СБП":
@@ -179,6 +228,14 @@ if __name__ == '__main__':
                 full_data.loc[i, 'Сумма транзакции'] = full_data.loc[i, 'Сумма транзакции'] * -1
         if pd.isna(full_data.loc[i, "Сумма перевода"]):
             full_data.loc[i, "Сумма перевода"] = full_data.loc[i, 'Сумма транзакции'] + full_data.loc[i, 'Комиссия банка']
+        if len(full_data.loc[i, "Банк"]) > 7 and full_data.loc[i, "Система"] == "СБП":
+            full_data.loc[i, "Наименование банка"] = convert_bic_code(full_data.loc[i, "Банк"])
+        else:
+            full_data.loc[i, "Наименование банка"] = convert_bin(full_data.loc[i, "Карта или счет"])
+            # if full_data.loc[i, "Банк"] == "0" and "АЛЬФА" not in full_data.loc[i, "Наименование банка"].upper():
+            #     pass
+        # if pd.isna(full_data.loc[i, "Банк"]):
+
         # тут можно еще разных обработок наделать, например банка
 
     full_data = full_data.drop_duplicates(subset=['Дата', 'Время', 'Карта или счет', 'Номер терминала', "Код авторизации",'Сумма транзакции'])
@@ -240,16 +297,62 @@ if __name__ == '__main__':
                                 aggfunc=sum)  # margins=True
     mag_komiss = mag_komiss * -1
 
+    print("Собираем платежи по банкам  ********************************")
+    banks_data = pd.pivot_table(full_data, index=['Наименование банка'], values=['Сумма транзакции'], aggfunc=[sum, len])  # margins=True
+    banks_data = banks_data.sort_values(by=[('sum', 'Сумма транзакции')], ascending=False)
+    banks_data["% по сумме"] = round(banks_data["sum"] / banks_data["sum"].sum(), 4)
+    banks_data["% по количеству"] = round(banks_data["len"] / banks_data["len"].sum(), 4)
+    banks_data.loc['Всего'] = banks_data.sum()
+    banks_data.rename(columns={'sum': 'Сумма операций', 'len': 'Количество операций'}, inplace=True)
+    cols = list(banks_data.columns.values)
+    cols = [cols[0], cols[2], cols[1], cols[3]]
+    banks_data = banks_data[cols]
+    new_header = [el[0] for el in cols]
+
+
     # записываем результат в файл
     print("Запись результирующего файла  ********************************")
-    writer = pd.ExcelWriter("\\".join(sbp.dirname.split("\\")[:-1]) + chr(92) + "full_data.xlsx", engine='xlsxwriter')
-    full_data.to_excel(writer, sheet_name='Sheet0', index=False)
-    data_by_day.to_excel(writer, sheet_name='По дням', index=False)
-    mag_komiss.to_excel(writer, sheet_name='Для Филиппа')
-    bank_operation.to_excel(writer, sheet_name="Банк", index=False)
-    # df3.to_excel(writer, sheet_name='Sheetc')
-    writer.save()
+    # writer = pd.ExcelWriter("\\".join(sbp.dirname.split("\\")[:-1]) + chr(92) + "full_data.xlsx", engine='xlsxwriter')
+    # full_data.to_excel(writer, sheet_name='Sheet0', index=False)
+    # data_by_day.to_excel(writer, sheet_name='По дням', index=False)
+    # mag_komiss.to_excel(writer, sheet_name='Для Филиппа')
+    # bank_operation.to_excel(writer, sheet_name="Банк", index=False)
+    # # df3.to_excel(writer, sheet_name='Sheetc')
+    # writer.save()
 
+    writer = pd.ExcelWriter("\\".join(sbp.dirname.split("\\")[:-1]) + chr(92) + "full_data.xlsx", engine='xlsxwriter')
+    with writer as file_name:
+        full_data.to_excel(file_name, sheet_name="Sheet0", index=False)
+        # banks_data.to_excel(file_name, sheet_name="banks")
+        # Convert the dataframe to an XlsxWriter Excel object.
+        data_by_day.to_excel(file_name, sheet_name='По дням проверка', index=False)
+        mag_komiss.to_excel(file_name, sheet_name='Для Филиппа')
+        bank_operation.to_excel(file_name, sheet_name="Банк проверка", index=False)
+        banks_data.to_excel(file_name, sheet_name="banks", header=False)
+        # Get the xlsxwriter objects from the dataframe writer object.
+        workbook = writer.book
+        worksheet = writer.sheets["banks"]
+        # Add some cell formats.
+        format1 = workbook.add_format({'num_format': '#,##0'})
+        format2 = workbook.add_format({'num_format': '0%'})
+        header_format = workbook.add_format({
+            'bold': True,
+            'text_wrap': True,
+            'valign': 'top',
+            'fg_color': '#D7E4BC',
+            'border': 1})
+        worksheet.set_row(0, 30, header_format)
+        worksheet.write_row('B1', new_header)
+        # Set the column width and format.
+        worksheet.set_column('B:B', 15, format1)
+        worksheet.set_column('C:C', 10, format2)
+        worksheet.set_column('D:D', 15, format1)
+        worksheet.set_column('E:E', 10, format2)
+
+
+
+
+    db.close()
 
     # full_data.to_excel("\\".join(sbp.dirname.split("\\")[:-1]) + chr(92) + "full_data.xlsx", sheet_name="Sheet0", index=False)
 
