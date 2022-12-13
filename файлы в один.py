@@ -5,6 +5,7 @@ from tkinter import filedialog
 import pyodbc
 import datetime
 import sqlite3
+import requests
 
 datefrom = datetime.datetime(2022, 11, 1)
 dateto = datetime.datetime(2022, 11, 30)  # берется диапазон включая крайние даты
@@ -97,6 +98,7 @@ if __name__ == '__main__':
     eqv.all_data[["Номер терминала", "ID оплаты", "Референс операции", "Банк", "Валюта"]] = eqv.all_data[["Номер терминала", "ID оплаты", "Референс операции", "Банк", "Валюта"]].astype("int64").astype("str")
     eqv.all_data = eqv.all_data.drop_duplicates(subset=['Дата', 'Время', 'Карта или счет', 'Номер терминала', "Код авторизации",'Сумма транзакции'])
     eqv.all_data["Система"] = "эквайринг"
+    print("**************** эквайринг записываем общий файл")
     eqv.wrile_data()
     full_data = pd.concat([full_data, eqv.all_data], ignore_index=True)
     print("**************** эквайринг собрали")
@@ -113,6 +115,7 @@ if __name__ == '__main__':
     sbp.all_data[["Номер терминала", "Банк", "ID оплаты"]] = sbp.all_data[["Номер терминала", "Банк", "ID оплаты"]].astype("str")
     sbp.all_data["Система"] = "СБП"
     sbp.all_data = sbp.all_data.drop_duplicates(subset=['Дата', 'Время', 'ID СБП', 'ID QR', 'Карта или счет', 'Номер терминала', 'Сумма транзакции'])
+    print("********************************* СБП записываем общий файл")
     sbp.wrile_data()
     full_data = pd.concat([full_data, sbp.all_data], ignore_index=True)
     print("********************************* СБП собрали")
@@ -147,6 +150,7 @@ if __name__ == '__main__':
         return f"{time_new:02}{time_wrong[-6:]}"
 
     exl.all_data['Время'] = exl.all_data['Время'].apply(chg_time)
+    print("**************************************** excel записываем общий файл")
     exl.wrile_data()
     print("**************************************** excel собрали")
 
@@ -210,13 +214,22 @@ if __name__ == '__main__':
 
 
     full_data.insert(full_data.columns.get_loc('Банк') + 1, 'Наименование банка', "")
-    count = 10
+    count = 1
+    flag = False
+    rez = ""
+    new_bin = []
+    bin_not_found = []
+    chk_calc = []
     for i in range(0, len(full_data)):
         # Печать счетчика
-        rez = int(i/len(full_data)*100)
-        if rez >= count:
-            print(f"Обрабатываем операции: {rez}%")
-            count += 10
+        procent = int(i/len(full_data)*100)
+        if procent >= count:
+            if flag:
+                print("\b" * len(rez), end="", flush=True)
+            rez = f"Обрабатываем операции: {procent}%"
+            print(rez, end ="")
+            count += 1
+            flag = True
 
         if full_data.loc[i, 'Тип операции'] == "Возврат" and full_data.loc[i, 'Сумма транзакции'] > 0:
             full_data.loc[i, 'Сумма транзакции'] = full_data.loc[i, 'Сумма транзакции'] * -1
@@ -228,15 +241,66 @@ if __name__ == '__main__':
                 full_data.loc[i, 'Сумма транзакции'] = full_data.loc[i, 'Сумма транзакции'] * -1
         if pd.isna(full_data.loc[i, "Сумма перевода"]):
             full_data.loc[i, "Сумма перевода"] = full_data.loc[i, 'Сумма транзакции'] + full_data.loc[i, 'Комиссия банка']
+        if len(full_data.loc[i, "Тип операции"]) == "Покупка":
+            if full_data.loc[i, "Система"] == "СБП" and round(full_data.loc[i, "Сумма транзакции"] * 0.007, 2) != abs(
+                    full_data.loc[i, "Комиссия банка"]):
+                chk_calc.append(
+                    f'{full_data.loc[i, "Дата"]}, {full_data.loc[i, "Время"]}, {full_data.loc[i, "Номер терминала"]}, {full_data.loc[i, "Сумма транзакции"]}')
+            elif round(full_data.loc[i, "Сумма транзакции"] * 0.012, 2) != abs(full_data.loc[i, "Комиссия банка"]):
+                chk_calc.append(
+                    f'{full_data.loc[i, "Дата"]}, {full_data.loc[i, "Время"]}, {full_data.loc[i, "Номер терминала"]}, {full_data.loc[i, "Сумма транзакции"]}')
         if len(full_data.loc[i, "Банк"]) > 7 and full_data.loc[i, "Система"] == "СБП":
             full_data.loc[i, "Наименование банка"] = convert_bic_code(full_data.loc[i, "Банк"])
         else:
             full_data.loc[i, "Наименование банка"] = convert_bin(full_data.loc[i, "Карта или счет"])
-            # if full_data.loc[i, "Банк"] == "0" and "АЛЬФА" not in full_data.loc[i, "Наименование банка"].upper():
-            #     pass
-        # if pd.isna(full_data.loc[i, "Банк"]):
+            if full_data.loc[i, "Наименование банка"].upper() == "ДРУГОЙ":
+                if full_data.loc[i, "Банк"] == "0":
+                    sql_str = f'INSERT OR REPLACE INTO bincode ("BIN", "Платежная система", "Страна", "Банк-эмитент", "Адрес сайта банка")' \
+                              f' VALUES ("{full_data.loc[i, "Карта или счет"][0:6]}", "{full_data.loc[i, "Платежная система"].split(" ")[0]}",' \
+                              f' "{"Россия"}", "{"Alfa-Bank, Альфа-Банк"}", "{"alfabank.ru"}");'
+                    cur.execute(sql_str)
+                    db.commit()
+                    new_bin.append(f'добавили бин {full_data.loc[i, "Карта или счет"][0:6]} Альфабанка')
+                    full_data.loc[i, "Наименование банка"] = convert_bin(full_data.loc[i, "Карта или счет"])
+                else:
+                    if full_data.loc[i, 'Карта или счет'][0:6] not in bin_not_found:
+                        url = "https://bin-ip-checker.p.rapidapi.com/"
+                        querystring = {"bin": f"{full_data.loc[i, 'Карта или счет'][0:6]}"}
+                        payload = {"bin": f"{full_data.loc[i, 'Карта или счет'][0:6]}"}
+                        headers = {"content-type": "application/json",
+                                   "X-RapidAPI-Key": "2ee170771emshe310361e8baaa6dp1b01dejsn7b3d6d68abb8",
+                                   "X-RapidAPI-Host": "bin-ip-checker.p.rapidapi.com"}
+                        response = requests.request("POST", url, json=payload, headers=headers, params=querystring)
+                        if response.status_code != 404:
+                            answ_text = response.json()
+                            if answ_text["success"] and answ_text["code"] == 200:
+                                if answ_text["BIN"]["valid"] and answ_text["BIN"]["issuer"]["name"] != "":
+                                    sql_str = f'INSERT OR REPLACE INTO bincode ("BIN", "Платежная система", "Страна", "Банк-эмитент", "Тип карты", "Категория карты", "Адрес сайта банка")' \
+                                              f' VALUES ("{answ_text["BIN"]["number"]}", "{answ_text["BIN"]["brand"]}",' \
+                                              f' "{answ_text["BIN"]["country"]["country"]}", "{answ_text["BIN"]["issuer"]["name"]}",' \
+                                              f' "{answ_text["BIN"]["type"]}", "{answ_text["BIN"]["level"]}", "{answ_text["BIN"]["issuer"]["website"]}");'
+                                    cur.execute(sql_str)
+                                    db.commit()
+                                    new_bin.append(
+                                        f'добавили бин {full_data.loc[i, "Карта или счет"][0:6]} , банк {answ_text["BIN"]["issuer"]["name"]} система {answ_text["BIN"]["brand"]} поиск {len(new_bin)+1}')
+                                    full_data.loc[i, "Наименование банка"] = convert_bin(full_data.loc[i, "Карта или счет"])
+                                else:
+                                    new_bin.append(f'бин {full_data.loc[i, "Карта или счет"][0:6]} не найден, поиск {len(new_bin)+1}')
+                                    bin_not_found.append(full_data.loc[i, "Карта или счет"][0:6])
+                        else:
+                            bin_not_found.append(full_data.loc[i, "Карта или счет"][0:6])
 
         # тут можно еще разных обработок наделать, например банка
+
+    print("\b" * len(rez), end="", flush=True)
+    print("Обработано 100% операций")
+    print("произведен поиск следующих бинов:")
+    print(*new_bin, sep="\n")
+    print("ошибки начисления комиссии:")
+    if len(chk_calc) == 0:
+        print("не найдены")
+    else:
+        print(*chk_calc, sep="\n")
 
     full_data = full_data.drop_duplicates(subset=['Дата', 'Время', 'Карта или счет', 'Номер терминала', "Код авторизации",'Сумма транзакции'])
     full_data = full_data.merge(pos.datatable, how="left", left_on="Номер терминала", right_on="posnumber", suffixes=('_alfa', '_pos'))
