@@ -91,6 +91,9 @@ svod = df[["Дата", "Сумма", "ДатаПоступило", "Получа
 svod = svod[svod["Номер мерчанта"].notnull()]
 svod = svod.sort_values(by=["Номер мерчанта", "Дата"], ignore_index = True)
 svod["Получено"] = svod["Сумма"] + svod["Сумма комиссии"]
+svod["Получено"] = svod["Получено"].astype("int")
+svod["Учтено"] = "Нет"
+svod.reset_index(drop=True, inplace=True)
 
 print("таблица выписок сформирована")
 
@@ -107,51 +110,161 @@ sber_df["Номер мерчанта"] = sber_df["Номер мерчанта"].
 # получение выборки данных из эквайринга Сбера
 svod_sber_df = sber_df[["Номер мерчанта", "Дата зачисления", "Сумма операции", "Сумма комиссии", "Сумма расчета"]]
 svod_sber_df = svod_sber_df.groupby(["Номер мерчанта", "Дата зачисления"], as_index=False).sum() #[["Сумма операции"]]
+svod_sber_df.reset_index(drop=True, inplace=True)
 # дополнительный расчет по сберу
 sber_test = sber_df[["Номер мерчанта", "Дата зачисления", "Дата операции магазин", "Сумма операции", "Сумма комиссии", "Сумма расчета"]]
 sber_test = sber_test.groupby(["Номер мерчанта", "Дата зачисления", "Дата операции магазин"], as_index=False).sum()
 
 # слияние данных сбера и банка
 print("Слияние данных и поиск недостающих платежей")
-itog = svod_sber_df.merge(svod, how = "left", left_on= ["Номер мерчанта", "Дата зачисления"], right_on=["Номер мерчанта", "Дата"],
-          suffixes=('_sber', '_bank'))
+itog = svod_sber_df.merge(svod, how = "left", left_on= ["Номер мерчанта", "Сумма операции"], right_on=["Номер мерчанта", "Получено"],
+          suffixes=('_sber', '_bank'), validate="one_to_one")
 
 # проверка на потерянные платежи при банковском переводе и не учтенные при проверке сумм зачислений по эквайрингу в середине месяца
 new_line = {'Номер мерчанта':[], 'Дата зачисления':[], 'Сумма операции':[], 'Сумма комиссии_sber':[], 'Сумма расчета':[], 'Дата':[], 'Сумма':[],
           'ДатаПоступило':[], 'Получатель':[], 'НазначениеПлатежа':[], 'Сумма комиссии_bank':[], 'Возврат1':[], 'Возврат2':[], 'Получено':[]}
 
+# первый проход по переводам эквайринга и их первичная проверка
+# если совпадение с платежом, добавляем в таблицу банковских платежей, что он найден
+
+svod_sber_df[["Дата", "Сумма", "ДатаПоступило", "Получатель", "НазначениеПлатежа",
+           "Сумма комиссии банк", "Возврат1", "Возврат2", "Получено"]] = ""
+for i in range(0, len(svod_sber_df)):
+    find_payment = svod.loc[(svod["Номер мерчанта"] == svod_sber_df.loc[i, "Номер мерчанта"]) & (svod["Дата"] >= svod_sber_df.loc[i, "Дата зачисления"])
+                            & (svod["Получено"] == svod_sber_df.loc[i, "Сумма операции"])]
+    if len(find_payment) == 1:
+        find_payment_idx = find_payment.index[0]
+        svod_sber_df.loc[i, "Дата"] = find_payment.loc[find_payment_idx, "Дата"]
+        svod_sber_df.loc[i, "Сумма"] = find_payment.loc[find_payment_idx, "Сумма"]
+        svod_sber_df.loc[i, "ДатаПоступило"] = find_payment.loc[find_payment_idx, "ДатаПоступило"]
+        svod_sber_df.loc[i, "Получатель"] = find_payment.loc[find_payment_idx, "Получатель"]
+        svod_sber_df.loc[i, "НазначениеПлатежа"] = find_payment.loc[find_payment_idx, "НазначениеПлатежа"]
+        svod_sber_df.loc[i, "Сумма комиссии банк"] = find_payment.loc[find_payment_idx, "Сумма комиссии"]
+        svod_sber_df.loc[i, "Возврат1"] = find_payment.loc[find_payment_idx, "Возврат1"]
+        svod_sber_df.loc[i, "Возврат2"] = find_payment.loc[find_payment_idx, "Возврат2"]
+        svod_sber_df.loc[i, "Получено"] = find_payment.loc[find_payment_idx, "Получено"]
+        svod.loc[find_payment_idx, "Учтено"] = "Да"
+    elif len(find_payment) == 0:
+        svod_sber_df.loc[i, "Сумма"] = 0
+    else:
+        svod_sber_df.loc[i, "Сумма"] = -1
+
+# далее идет подбор не найденных операций и платежей
+
+
+def find_equal_transaction (sber_oper :list, bank_oper :list) -> dict:
+    """ Подпрограмма поиска совпадений по суммам, на входе два листа
+    sber_oper - список с цифрами, содержащий хотя бы 1 элемент, это не найденные операции Сбербанка эквайринг
+    bank_oper - список с цифрами, содержащий хотя бы 1 элемент, это не найденные операции Банка по переводам
+    oper_calc - возвращает словарь подобранных совпадений, где номер элемента листа по ключу банка соответствует
+                совпадению с тем же номером элемента листа по ключу сбера
+    """
+
+    oper_calc = {"sber": [], "bank": []}
+    naideno = []
+    for i in range(len(sber_oper)):
+        if sber_oper[i] in naideno:
+            continue
+        for j in range(len(bank_oper)):
+            if sber_oper[i] in naideno or bank_oper[j] in naideno:
+                continue
+            sum_op = sber_oper[i]
+            sum_bk = bank_oper[j]
+            found_flag = True
+            op = i
+            bk = j
+            oper_calc_tmp_sber = [sber_oper[i]]
+            oper_calc_tmp_bank = [bank_oper[j]]
+            while found_flag:
+                if sber_oper[i] in naideno:
+                    op += 1
+                    continue
+                if bank_oper[j] in naideno:
+                    bk += 1
+                    continue
+                if sum_op < sum_bk:
+                    op += 1
+                    if op > len(sber_oper) - 1:
+                        break
+                    else:
+                        sum_op += sber_oper[op]
+                        oper_calc_tmp_sber.append(sber_oper[op])
+                elif sum_op > sum_bk:
+                    bk += 1
+                    if bk > len(bank_oper) - 1:
+                        break
+                    else:
+                        sum_bk += bank_oper[bk]
+                        oper_calc_tmp_bank.append(bank_oper[bk])
+                else:
+                    found_flag = False
+                    oper_calc["sber"].append(oper_calc_tmp_sber)
+                    oper_calc["bank"].append(oper_calc_tmp_bank)
+                    naideno += oper_calc_tmp_sber + oper_calc_tmp_bank
+
+
+    print(oper_calc)
+    print(naideno)
+    return oper_calc
+
+# берем мерчанты с ненайденными платежами
+merch_list = set(svod_sber_df[svod_sber_df["Сумма"] == 0]["Номер мерчанта"].tolist())
+if len(merch_list) > 0:
+    # запускаем цикл по мерчантам
+    for one_merch in merch_list:
+        # берем срез данных по эквайрингу по мерчанту и не найденной сумме и по необработанным платежам банка
+        sber_ne_naiden = svod_sber_df[(svod_sber_df["Номер мерчанта"] == one_merch) & (svod_sber_df["Сумма"] == 0)]
+        find_payment = svod.loc[(svod["Номер мерчанта"] == one_merch) & (svod["Учтено"] == "Нет")] # (svod["Дата"] >= sber_ne_naiden.iloc[0]["Дата зачисления"])
+        if len(find_payment) > 0:
+            print(one_merch)
+            match_found = find_equal_transaction(sber_ne_naiden["Сумма операции"].tolist(), find_payment["Получено"].tolist())
+            for i in range(len(match_found["sber"])):
+                for j in range(len(match_found["sber"][i])):
+                    svod_sber_df.loc[(svod_sber_df["Номер мерчанта"] == one_merch) & (svod_sber_df["Сумма"] == 0) &
+                                     (svod_sber_df["Сумма операции"] == match_found["sber"][i][j] ), ["НазначениеПлатежа"]] = f'{match_found["bank"][i]}={sum(match_found["bank"][i])}'
+            for i in range(len(match_found["bank"])):
+                for j in range(len(match_found["bank"][i])):
+                    svod.loc[(svod["Номер мерчанта"] == one_merch) & (svod["Учтено"] == "Нет") &
+                                     (svod["Получено"] == match_found["bank"][i][j] ), ["Учтено"]] = "Да"
+
+
+
+
+
+# {'sber': [[5549, 43031], [75572, 15907], [50326]], 'bank': [[48580], [63469, 28010], [33864, 16462]]}
+
 # проход по банковским платежам и ищем, попали ли они в проверку
 # если не попали, добавляем их в таблицу
-for i in range(1, len(svod)):
-    find_lost_payment = itog.loc[itog["Номер мерчанта"] == svod.loc[i, "Номер мерчанта"]]
-    if len(find_lost_payment) == 0:
-        print("**************** потерянный мерчант (ищи в выписках)", svod.loc[i, "Номер мерчанта"])
-        continue
-    tmp_list_data = sorted(find_lost_payment["Дата"].tolist()) # ограничения по датам эквайринга
-    end_data = tmp_list_data[-1] # последняя дата эквайринга
-    start_data = tmp_list_data[0] # первая дата (как бы ограничиваем месяц)
-    find_lost_payment = find_lost_payment.loc[find_lost_payment["Дата зачисления"] == svod.loc[i, "Дата"]]
-    find_lost_payment = find_lost_payment.loc[find_lost_payment["Получено"] == svod.loc[i, "Получено"]]
-    if len(find_lost_payment) == 0 and svod.loc[i, "Дата"] <= end_data and svod.loc[i, "Дата"] >= start_data:
-        new_line['Номер мерчанта'].append(svod.loc[i, "Номер мерчанта"])
-        new_line['Дата зачисления'].append(svod.loc[i, "Дата"])
-        new_line['Сумма операции'].append(0)
-        new_line['Сумма комиссии_sber'].append(0)
-        new_line['Сумма расчета'].append(0)
-        new_line["Дата"].append(svod.loc[i, "Дата"])
-        new_line["Сумма"].append(svod.loc[i, "Сумма"])
-        new_line["ДатаПоступило"].append(svod.loc[i, "ДатаПоступило"])
-        new_line["Получатель"].append(svod.loc[i, "Получатель"])
-        new_line["НазначениеПлатежа"].append(svod.loc[i, "НазначениеПлатежа"])
-        new_line["Сумма комиссии_bank"].append(svod.loc[i, "Сумма комиссии"])
-        new_line["Возврат1"].append(svod.loc[i, "Возврат1"])
-        new_line["Возврат2"].append(svod.loc[i, "Возврат2"])
-        new_line["Получено"].append(svod.loc[i, "Получено"])
-if len(new_line['Номер мерчанта']) > 0:
-    new_line_df = pd.DataFrame(new_line)
-    itog = pd.concat([itog, new_line_df], ignore_index = True)
-    itog = itog.sort_values(by = ["Номер мерчанта",	"Дата зачисления"], ignore_index = True)
-print("Недостающие платежи проверены")
+# for i in range(1, len(svod)):
+#     find_lost_payment = itog.loc[itog["Номер мерчанта"] == svod.loc[i, "Номер мерчанта"]]
+#     if len(find_lost_payment) == 0:
+#         print("**************** потерянный мерчант (ищи в выписках)", svod.loc[i, "Номер мерчанта"])
+#         continue
+#     tmp_list_data = sorted(find_lost_payment["Дата"].tolist()) # ограничения по датам эквайринга
+#     end_data = tmp_list_data[-1] # последняя дата эквайринга
+#     start_data = tmp_list_data[0] # первая дата (как бы ограничиваем месяц)
+#     find_lost_payment = find_lost_payment.loc[find_lost_payment["Дата зачисления"] == svod.loc[i, "Дата"]]
+#     find_lost_payment = find_lost_payment.loc[find_lost_payment["Получено"] == svod.loc[i, "Получено"]]
+#     if len(find_lost_payment) == 0 and svod.loc[i, "Дата"] <= end_data and svod.loc[i, "Дата"] >= start_data:
+#         new_line['Номер мерчанта'].append(svod.loc[i, "Номер мерчанта"])
+#         new_line['Дата зачисления'].append(svod.loc[i, "Дата"])
+#         new_line['Сумма операции'].append(0)
+#         new_line['Сумма комиссии_sber'].append(0)
+#         new_line['Сумма расчета'].append(0)
+#         new_line["Дата"].append(svod.loc[i, "Дата"])
+#         new_line["Сумма"].append(svod.loc[i, "Сумма"])
+#         new_line["ДатаПоступило"].append(svod.loc[i, "ДатаПоступило"])
+#         new_line["Получатель"].append(svod.loc[i, "Получатель"])
+#         new_line["НазначениеПлатежа"].append(svod.loc[i, "НазначениеПлатежа"])
+#         new_line["Сумма комиссии_bank"].append(svod.loc[i, "Сумма комиссии"])
+#         new_line["Возврат1"].append(svod.loc[i, "Возврат1"])
+#         new_line["Возврат2"].append(svod.loc[i, "Возврат2"])
+#         new_line["Получено"].append(svod.loc[i, "Получено"])
+# if len(new_line['Номер мерчанта']) > 0:
+#     new_line_df = pd.DataFrame(new_line)
+#     itog = pd.concat([itog, new_line_df], ignore_index = True)
+#     itog = itog.sort_values(by = ["Номер мерчанта",	"Дата зачисления"], ignore_index = True)
+# print("Недостающие платежи проверены")
 # проверка на пустые значения после слияния
 for i in range(1, len(itog)):
     if pd.isna(itog.loc[i, "Получено"]):
